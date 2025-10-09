@@ -379,12 +379,34 @@ def query_chat_endpoint(input_file, output_file, query_endpoints, temperature, n
     # print the time with two decimal places
     print(f"Time taken: {t1-t0:.2f} seconds")
     
+from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
+import torch
+
+_TOK=None; _PIPE=None
+def _lazy_load(model_id="Qwen/Qwen2-1.5B-Instruct", max_new_tokens=128):
+    global _TOK,_PIPE
+    if _PIPE: return _PIPE,_TOK
+    quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
+                               bnb_4bit_compute_dtype=torch.bfloat16)
+    _TOK = AutoTokenizer.from_pretrained(model_id, use_fast=True)
+    model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quant,
+                                                 dtype="auto", device_map="auto",
+                                                 low_cpu_mem_usage=True)
+    _PIPE = pipeline("text-generation", model=model, tokenizer=_TOK)
+    _PIPE.max_new_tokens = 128
+    return _PIPE,_TOK
+
 def self_deploy_query_function():
-    ### implement your self-deploy query function here
-    def query(prompt, temperature):
-        # Implement your self-deploy query logic here
-        pass
-    raise NotImplementedError("Self-deploy query function not implemented")
+    _lazy_load()
+    def query(prompt, temperature=0.0):
+        pipe,tok = _lazy_load()
+        chat = tok.apply_chat_template(
+            [{"role":"system","content":"Se richiesto JSON, restituisci SOLO JSON valido."},
+             {"role":"user","content":prompt}], tokenize=False, add_generation_prompt=True)
+        out = pipe(chat, max_new_tokens=pipe.max_new_tokens, do_sample=(temperature>0),
+                   temperature=(float(temperature) if temperature>0 else None),
+                   return_full_text=False, eos_token_id=tok.eos_token_id)[0]["generated_text"]
+        return out
     return query
 
 def main(args):
@@ -428,9 +450,24 @@ def main(args):
         logger.setLevel(logging.WARN)
 
     if args.input_file:
-        for input_file in args.input_file:
-            assert os.path.exists(input_file), f"{input_file} not found"
-        raise NotImplementedError("Input file processing not implemented")
+      temp = args.temperature if args.temperature is not None else 0.0
+      for input_file in args.input_file:
+        assert os.path.exists(input_file), f"{input_file} not found"
+        # nome output standard: <input>.<provider>.result.jsonl
+        base = os.path.splitext(input_file)[0]
+        out_path = f"{base}.{args.api_provider}.result.jsonl"
+        # evita concorrenza GPU
+        n_par = max(1, int(args.n_parallel_call_per_key))
+        query_chat_endpoint(
+            input_file,
+            out_path,
+            [query_func],                   
+            temp,
+            n_parallel_call_per_key=n_par,
+            shuffle=args.shuffle,
+            model_name="Qwen2-1.5B-Instruct"
+        )
+      return
     else:
         print("Loading MMTU from huggingface...")
 
