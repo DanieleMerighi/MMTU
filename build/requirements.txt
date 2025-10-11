@@ -11,3 +11,5 @@ transformers
 accelerate 
 bitsandbytes
 duckdb
+protobuf
+torch
