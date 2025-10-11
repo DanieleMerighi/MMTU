@@ -383,7 +383,7 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndB
 import torch
 
 _TOK=None; _PIPE=None
-def _lazy_load(model_id="Qwen/Qwen2-1.5B-Instruct", max_new_tokens=128):
+def _lazy_load(model_id="meta-llama/Llama-3.2-3B-Instruct", max_new_tokens=128):
     global _TOK,_PIPE
     if _PIPE: return _PIPE,_TOK
     quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
