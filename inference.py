@@ -465,7 +465,7 @@ def main(args):
             temp,
             n_parallel_call_per_key=n_par,
             shuffle=args.shuffle,
-            model_name="Qwen2-1.5B-Instruct"
+            model_name=args.model
         )
       return
     else:
