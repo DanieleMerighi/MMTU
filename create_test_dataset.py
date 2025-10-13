@@ -1,22 +1,14 @@
-from datasets import load_dataset, concatenate_datasets
-
-SEED = 42
-K = 5  # samples per task
-
-print("Loading MMTU dataset...")
+# 1. Esegui il pipeline
+from datasets import load_dataset
 ds = load_dataset("MMTU-benchmark/MMTU", split="train")
 
-print(f"Total samples: {len(ds)}")
-print(f"Creating test dataset with {K} samples per task...")
+# 2. Filtra solo task MCP-relevant
+mcp_tasks = ['table-join', 'equi-join', 'column-transform', 
+             'data-cleaning', 'data-imputation', 'nl-to-sql']
+mcp_data = ds.filter(lambda x: x['task'] in mcp_tasks)
 
-subs = []
-for t in sorted(set(ds["task"])):
-    d = ds.filter(lambda x: x["task"] == t).shuffle(seed=SEED)
-    subs.append(d.select(range(min(K, len(d)))))
+# 3. Prendi 50 esempi per task per test rapido
+small_test = mcp_data.select(range(min(300, len(mcp_data))))
 
-final = concatenate_datasets(subs)
-print(f"Final test dataset: {len(final)} samples")
-
-output_file = "mmtu.jsonl"
-final.to_json(output_file, lines=True, force_ascii=False)
-print(f"Dataset saved to {output_file}")
+# 4. Salva e testa
+small_test.to_json("mcp_test.jsonl", lines=True)

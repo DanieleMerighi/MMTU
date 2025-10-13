@@ -383,17 +383,17 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndB
 import torch
 
 _TOK=None; _PIPE=None
-def _lazy_load(model_id="meta-llama/Llama-3.2-3B-Instruct", max_new_tokens=128):
+def _lazy_load(model_id="deepseek-ai/deepseek-coder-6.7b-instruct", max_new_tokens=128):
     global _TOK,_PIPE
     if _PIPE: return _PIPE,_TOK
     quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
                                bnb_4bit_compute_dtype=torch.bfloat16)
-    _TOK = AutoTokenizer.from_pretrained(model_id, use_fast=True)
-    model = AutoModelForCausalLM.from_pretrained(model_id, quantization_config=quant,
+    _TOK = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
+    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True, quantization_config=quant,
                                                  dtype="auto", device_map="auto",
                                                  low_cpu_mem_usage=True)
     _PIPE = pipeline("text-generation", model=model, tokenizer=_TOK)
-    _PIPE.max_new_tokens = 128
+    _PIPE.max_new_tokens = max_new_tokens
     return _PIPE,_TOK
 
 def self_deploy_query_function():
@@ -401,8 +401,7 @@ def self_deploy_query_function():
     def query(prompt, temperature=0.0):
         pipe,tok = _lazy_load()
         chat = tok.apply_chat_template(
-            [{"role":"system","content":"Se richiesto JSON, restituisci SOLO JSON valido."},
-             {"role":"user","content":prompt}], tokenize=False, add_generation_prompt=True)
+            [{"role":"user","content":prompt}], tokenize=False, add_generation_prompt=True)
         out = pipe(chat, max_new_tokens=pipe.max_new_tokens, do_sample=(temperature>0),
                    temperature=(float(temperature) if temperature>0 else None),
                    return_full_text=False, eos_token_id=tok.eos_token_id)[0]["generated_text"]
