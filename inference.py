@@ -383,11 +383,11 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndB
 import torch
 
 _TOK=None; _PIPE=None
-def _lazy_load(model_id="Qwen/Qwen3-8B-AWQ", max_new_tokens=2048):
+def _lazy_load(model_id="Qwen/Qwen3-4B", max_new_tokens=2048):
     global _TOK,_PIPE
     if _PIPE: return _PIPE,_TOK
     
-    # AWQ è già quantizzato, non serve BitsAndBytesConfig
+    # Qwen3-4B non è quantizzato, ma è più piccolo e veloce
     _TOK = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
@@ -404,7 +404,7 @@ def _lazy_load(model_id="Qwen/Qwen3-8B-AWQ", max_new_tokens=2048):
     _PIPE.max_new_tokens = max_new_tokens
     return _PIPE,_TOK
 
-def self_deploy_query_function(model_id="Qwen/Qwen3-8B-AWQ"):
+def self_deploy_query_function(model_id="Qwen/Qwen3-4B"):
     _lazy_load(model_id)
     def query(prompt, temperature=0.0):
         pipe,tok = _lazy_load(model_id)
@@ -530,7 +530,7 @@ if __name__ == "__main__":
     parser_ai_foundry.add_argument("--model", type=str, help="AI Foundry model name", required=True)
 
     parser_self_deploy = subparsers.add_parser("self_deploy", help="Self Deploy")
-    parser_self_deploy.add_argument("--model", type=str, help="HuggingFace model name", default="Qwen/Qwen3-8B-AWQ")
+    parser_self_deploy.add_argument("--model", type=str, help="HuggingFace model name", default="Qwen/Qwen3-4B")
 
     parser.add_argument("-n", "--n_parallel_call_per_key", default=1,
                         type=int, help="number of parallel calls per key")
