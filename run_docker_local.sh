@@ -19,4 +19,4 @@ docker run \
     --memory="30g" \
     --gpus all \
     mmtu-image \
-    bash -c "cd /workspace && python3 inference.py -i $INPUT_FILE -l info self_deploy"
+    bash -c "cd /workspace && python3 inference.py -i $INPUT_FILE -l info self_deploy --model Qwen/Qwen3-8B-AWQ"

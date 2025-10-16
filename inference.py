@@ -383,23 +383,31 @@ from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndB
 import torch
 
 _TOK=None; _PIPE=None
-def _lazy_load(model_id="deepseek-ai/deepseek-coder-6.7b-instruct", max_new_tokens=128):
+def _lazy_load(model_id="Qwen/Qwen3-8B-AWQ", max_new_tokens=2048):
     global _TOK,_PIPE
     if _PIPE: return _PIPE,_TOK
-    quant = BitsAndBytesConfig(load_in_4bit=True, bnb_4bit_quant_type="nf4",
-                               bnb_4bit_compute_dtype=torch.bfloat16)
-    _TOK = AutoTokenizer.from_pretrained(model_id, trust_remote_code=True)
-    model = AutoModelForCausalLM.from_pretrained(model_id, trust_remote_code=True, quantization_config=quant,
-                                                 dtype="auto", device_map="auto",
-                                                 low_cpu_mem_usage=True)
+    
+    # AWQ è già quantizzato, non serve BitsAndBytesConfig
+    _TOK = AutoTokenizer.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        cache_dir="/llms"
+    )
     _PIPE = pipeline("text-generation", model=model, tokenizer=_TOK)
     _PIPE.max_new_tokens = max_new_tokens
     return _PIPE,_TOK
 
-def self_deploy_query_function():
-    _lazy_load()
+def self_deploy_query_function(model_id="Qwen/Qwen3-8B-AWQ"):
+    _lazy_load(model_id)
     def query(prompt, temperature=0.0):
-        pipe,tok = _lazy_load()
+        pipe,tok = _lazy_load(model_id)
         chat = tok.apply_chat_template(
             [{"role":"user","content":prompt}], tokenize=False, add_generation_prompt=True)
         out = pipe(chat, max_new_tokens=pipe.max_new_tokens, do_sample=(temperature>0),
@@ -422,7 +430,7 @@ def main(args):
             args.endpoint, args.model, args.api_key)
         query_endpoints = [query_func]
     elif args.api_provider == "self_deploy":
-        query_func = self_deploy_query_function()
+        query_func = self_deploy_query_function(args.model)
         query_endpoints = [query_func]
     else:
         raise ValueError("Invalid API provider")
@@ -450,6 +458,8 @@ def main(args):
 
     if args.input_file:
       temp = args.temperature if args.temperature is not None else 0.0
+      # Determina il model_name in base al provider
+      model_name = getattr(args, 'model', args.api_provider)
       for input_file in args.input_file:
         assert os.path.exists(input_file), f"{input_file} not found"
         # nome output standard: <input>.<provider>.result.jsonl
@@ -464,7 +474,7 @@ def main(args):
             temp,
             n_parallel_call_per_key=n_par,
             shuffle=args.shuffle,
-            model_name=args.model
+            model_name=model_name
         )
       return
     else:
@@ -520,6 +530,7 @@ if __name__ == "__main__":
     parser_ai_foundry.add_argument("--model", type=str, help="AI Foundry model name", required=True)
 
     parser_self_deploy = subparsers.add_parser("self_deploy", help="Self Deploy")
+    parser_self_deploy.add_argument("--model", type=str, help="HuggingFace model name", default="Qwen/Qwen3-8B-AWQ")
 
     parser.add_argument("-n", "--n_parallel_call_per_key", default=1,
                         type=int, help="number of parallel calls per key")
