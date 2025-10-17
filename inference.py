@@ -1,6 +1,7 @@
 import pandas as pd
 import openai
 import os
+import sys
 import random
 from io import StringIO
 import threading
@@ -382,13 +383,16 @@ def query_chat_endpoint(input_file, output_file, query_endpoints, temperature, n
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 import torch
 
-_TOK=None; _PIPE=None
-def _lazy_load(model_id="Qwen/Qwen3-4B", max_new_tokens=2048):
-    global _TOK,_PIPE
-    if _PIPE: return _PIPE,_TOK
-    
-    # Qwen3-4B non è quantizzato, ma è più piccolo e veloce
-    _TOK = AutoTokenizer.from_pretrained(
+_TOK=None; _PIPE=None; _CURRENT_MODEL=None
+
+# ============================================================================
+# MODEL LOADING FUNCTIONS - Add your models here!
+# ============================================================================
+
+def load_qwen3_8b_awq(max_new_tokens=2048):
+    """Load Qwen3-8B-AWQ (quantized, efficient)"""
+    model_id = "Qwen/Qwen3-8B-AWQ"
+    tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
         cache_dir="/llms"
@@ -400,19 +404,149 @@ def _lazy_load(model_id="Qwen/Qwen3-4B", max_new_tokens=2048):
         low_cpu_mem_usage=True,
         cache_dir="/llms"
     )
-    _PIPE = pipeline("text-generation", model=model, tokenizer=_TOK)
-    _PIPE.max_new_tokens = max_new_tokens
-    return _PIPE,_TOK
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    pipe.max_new_tokens = max_new_tokens
+    return pipe, tokenizer
 
-def self_deploy_query_function(model_id="Qwen/Qwen3-4B"):
-    _lazy_load(model_id)
+def load_qwen3_4b(max_new_tokens=2048):
+    """Load Qwen3-4B (faster, smaller)"""
+    model_id = "Qwen/Qwen3-4B"
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        cache_dir="/llms"
+    )
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    pipe.max_new_tokens = max_new_tokens
+    return pipe, tokenizer
+
+def load_llama_3_2_3b(max_new_tokens=2048):
+    """Load Llama 3.2 3B Instruct"""
+    model_id = "meta-llama/Llama-3.2-3B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        cache_dir="/llms"
+    )
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    pipe.max_new_tokens = max_new_tokens
+    return pipe, tokenizer
+
+def load_llama_3_1_8b_awq(max_new_tokens=2048):
+    """Load Llama 3.1 8B AWQ (quantized)"""
+    model_id = "hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4"
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        cache_dir="/llms"
+    )
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    pipe.max_new_tokens = max_new_tokens
+    return pipe, tokenizer
+
+def load_custom_model(model_id, max_new_tokens=2048):
+    """Load any HuggingFace model by ID"""
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        cache_dir="/llms"
+    )
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    pipe.max_new_tokens = max_new_tokens
+    return pipe, tokenizer
+
+# ============================================================================
+# MODEL REGISTRY - Map model names to loading functions
+# ============================================================================
+
+MODEL_REGISTRY = {
+    "qwen3-8b-awq": load_qwen3_8b_awq,
+    "qwen3-4b": load_qwen3_4b,
+    "llama-3.2-3b": load_llama_3_2_3b,
+    "llama-3.1-8b-awq": load_llama_3_1_8b_awq,
+}
+
+def _lazy_load(model_name="qwen3-8b-awq", max_new_tokens=2048):
+    """
+    Lazy load a model by name.
+    
+    Args:
+        model_name: Short name from MODEL_REGISTRY or full HuggingFace model ID
+        max_new_tokens: Maximum tokens to generate
+    
+    Returns:
+        tuple: (pipeline, tokenizer)
+    """
+    global _TOK, _PIPE, _CURRENT_MODEL
+    
+    # If model is already loaded and same as requested, return it
+    if _PIPE and _CURRENT_MODEL == model_name:
+        return _PIPE, _TOK
+    
+    print(f"Loading model: {model_name}")
+    
+    # Check if it's a registered model
+    if model_name in MODEL_REGISTRY:
+        _PIPE, _TOK = MODEL_REGISTRY[model_name](max_new_tokens)
+    else:
+        # Assume it's a full HuggingFace model ID
+        print(f"Model not in registry, loading as custom: {model_name}")
+        _PIPE, _TOK = load_custom_model(model_name, max_new_tokens)
+    
+    _CURRENT_MODEL = model_name
+    return _PIPE, _TOK
+
+def self_deploy_query_function(model_name="qwen3-8b-awq"):
+    """
+    Create a query function for a specific model.
+    
+    Args:
+        model_name: Model name from registry or HuggingFace ID
+    """
+    _lazy_load(model_name)
     def query(prompt, temperature=0.0):
-        pipe,tok = _lazy_load(model_id)
+        pipe, tok = _lazy_load(model_name)
         chat = tok.apply_chat_template(
-            [{"role":"user","content":prompt}], tokenize=False, add_generation_prompt=True)
-        out = pipe(chat, max_new_tokens=pipe.max_new_tokens, do_sample=(temperature>0),
-                   temperature=(float(temperature) if temperature>0 else None),
-                   return_full_text=False, eos_token_id=tok.eos_token_id)[0]["generated_text"]
+            [{"role":"user","content":prompt}], 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
+        out = pipe(
+            chat, 
+            max_new_tokens=pipe.max_new_tokens, 
+            do_sample=(temperature>0),
+            temperature=(float(temperature) if temperature>0 else None),
+            return_full_text=False, 
+            eos_token_id=tok.eos_token_id
+        )[0]["generated_text"]
         return out
     return query
 
@@ -462,9 +596,11 @@ def main(args):
       model_name = getattr(args, 'model', args.api_provider)
       for input_file in args.input_file:
         assert os.path.exists(input_file), f"{input_file} not found"
-        # nome output standard: <input>.<provider>.result.jsonl
+        # nome output: <input>.<model_name>.result.jsonl
         base = os.path.splitext(input_file)[0]
-        out_path = f"{base}.{args.api_provider}.result.jsonl"
+        # Usa il nome del modello invece di api_provider
+        model_output_name = model_name.replace('/', '-').replace('_', '-')
+        out_path = f"{base}.{model_output_name}.result.jsonl"
         # evita concorrenza GPU
         n_par = max(1, int(args.n_parallel_call_per_key))
         query_chat_endpoint(
@@ -488,7 +624,10 @@ def main(args):
         # Save to JSONL file
         mmtu_file = "mmtu.jsonl"
         ds.to_json(mmtu_file, lines=True)
-        output_file = f"mmtu.{args.model}.result.jsonl"            
+        
+        # Usa il nome del modello invece di api_provider nel nome file
+        model_output_name = args.model.replace('/', '-').replace('_', '-')
+        output_file = f"mmtu.{model_output_name}.result.jsonl"            
 
         query_chat_endpoint(
                 mmtu_file, 
@@ -530,13 +669,26 @@ if __name__ == "__main__":
     parser_ai_foundry.add_argument("--model", type=str, help="AI Foundry model name", required=True)
 
     parser_self_deploy = subparsers.add_parser("self_deploy", help="Self Deploy")
-    parser_self_deploy.add_argument("--model", type=str, help="HuggingFace model name", default="Qwen/Qwen3-4B")
+    parser_self_deploy.add_argument(
+        "--model", 
+        type=str, 
+        help="Model name from registry (qwen3-8b-awq, qwen3-4b, llama-3.2-3b, llama-3.1-8b-awq) or full HuggingFace ID", 
+        default="qwen3-8b-awq"
+    )
 
     parser.add_argument("-n", "--n_parallel_call_per_key", default=1,
                         type=int, help="number of parallel calls per key")
     parser.add_argument("-l", "--log_level", default="warn", choices=["info", "warn"], type=str)
     parser.add_argument("--shuffle", action="store_true")
     parser.add_argument("--overwrite", action="store_true")
+    
+    # Print available models when using self_deploy
+    if len(sys.argv) > 1 and sys.argv[1] == "self_deploy" and "--help" in sys.argv:
+        print("\n📦 Available models in registry:")
+        for model_name in MODEL_REGISTRY.keys():
+            print(f"  - {model_name}")
+        print("\n💡 You can also use any HuggingFace model ID directly.")
+    
     args = parser.parse_args()
 
     main(args)
