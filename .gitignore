@@ -24,3 +24,5 @@ configurations/Data-Imputation/v0.2_no_no_explanation
 pyrightconfig.json
 
 .venv
+
+.github/
