@@ -13,3 +13,4 @@ bitsandbytes
 duckdb
 protobuf
 torch
+autoawq
