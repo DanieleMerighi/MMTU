@@ -483,11 +483,31 @@ def load_custom_model(model_id, max_new_tokens=2048):
     pipe.max_new_tokens = max_new_tokens
     return pipe, tokenizer
 
+def load_qwen2_5_7b(max_new_tokens=2048):
+    """Load Qwen2.5-7B-Instruct (excellent for structured reasoning and tables)"""
+    model_id = "Qwen/Qwen2.5-7B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id, 
+        trust_remote_code=True,
+        device_map="auto",
+        low_cpu_mem_usage=True,
+        cache_dir="/llms"
+    )
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    pipe.max_new_tokens = max_new_tokens
+    return pipe, tokenizer
+
 # ============================================================================
 # MODEL REGISTRY - Map model names to loading functions
 # ============================================================================
 
 MODEL_REGISTRY = {
+    "qwen2.5-7b": load_qwen2_5_7b,
     "qwen3-8b-awq": load_qwen3_8b_awq,
     "qwen3-4b": load_qwen3_4b,
     "llama-3.2-3b": load_llama_3_2_3b,

@@ -13,4 +13,4 @@ docker run \
     --memory="30g" \
     --gpus '"device='"$CUDA_VISIBLE_DEVICES"'"' \
     mmtu-image \
-    bash -c "cd /workspace && python3 inference.py -i ${1} -l info self_deploy --model qwen3-4b"
+    bash -c "cd /workspace && python3 inference.py -i ${1} -l info self_deploy --model qwen2.5-7b"

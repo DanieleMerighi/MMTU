@@ -4,48 +4,57 @@ This file lists all pre-configured models available for inference.
 
 ## 📋 Registered Models
 
-### 1. **qwen3-8b-awq** (Default)
+### 1. **qwen2.5-7b** ⭐ Recommended for MMTU
+- **HuggingFace ID**: `Qwen/Qwen2.5-7B-Instruct`
+- **Size**: ~15 GB
+- **Speed**: ⚡⚡ Fast
+- **Quality**: ⭐⭐⭐⭐⭐ Excellent
+- **Best for**: Table understanding, structured reasoning, SQL, data manipulation
+- **Note**: Will auto-download on first use with correct permissions
+
+### 2. **qwen3-8b-awq**
 - **HuggingFace ID**: `Qwen/Qwen3-8B-AWQ`
 - **Size**: ~4.5 GB (quantized)
 - **Speed**: ⚡⚡ Fast
 - **Quality**: ⭐⭐⭐⭐ Excellent
 - **Best for**: Complex table tasks, high accuracy needed
-- **Note**: Requires write permissions on `/llms/.locks/`
+- **Note**: Requires write permissions on `/llms/.locks/` (permission issues reported)
 
-### 2. **qwen3-4b**
+### 3. **qwen3-4b**
 - **HuggingFace ID**: `Qwen/Qwen3-4B`
 - **Size**: ~8 GB
 - **Speed**: ⚡⚡⚡ Very Fast
 - **Quality**: ⭐⭐⭐ Good
 - **Best for**: Quick tests, iterative development
-- **Note**: Good permissions, works out of the box
+- **Note**: Permission issues on shared cache
 
-### 3. **llama-3.2-3b**
+### 4. **llama-3.2-3b**
 - **HuggingFace ID**: `meta-llama/Llama-3.2-3B-Instruct`
 - **Size**: ~6 GB
 - **Speed**: ⚡⚡⚡ Very Fast
 - **Quality**: ⭐⭐⭐ Good
 - **Best for**: General tasks, baseline comparisons
-- **Note**: Good permissions, proven to work
+- **Note**: Has 777 permissions, works reliably
 
-### 4. **llama-3.1-8b-awq**
+### 5. **llama-3.1-8b-awq**
 - **HuggingFace ID**: `hugging-quants/Meta-Llama-3.1-8B-Instruct-AWQ-INT4`
 - **Size**: ~4.5 GB (quantized)
 - **Speed**: ⚡⚡ Fast
 - **Quality**: ⭐⭐⭐⭐ Excellent
 - **Best for**: Large-scale inference, good balance
+- **Note**: May have permission/AWQ compatibility issues
 
 ## 🚀 Usage Examples
 
 ### Using pre-configured model names:
 ```bash
-# Use Qwen3-8B-AWQ (default)
-python3 inference.py -i test.jsonl self_deploy
+# Use Qwen2.5-7B (recommended for MMTU tasks)
+python3 inference.py -i test.jsonl self_deploy --model qwen2.5-7b
 
 # Use Qwen3-4B (faster)
 python3 inference.py -i test.jsonl self_deploy --model qwen3-4b
 
-# Use Llama 3.2 3B
+# Use Llama 3.2 3B (reliable fallback)
 python3 inference.py -i test.jsonl self_deploy --model llama-3.2-3b
 ```
 
