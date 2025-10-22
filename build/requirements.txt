@@ -7,10 +7,10 @@ tenacity
 datasets
 openai
 azure-ai-inference
-transformers
+transformers==4.51.3
 accelerate 
 bitsandbytes
 duckdb
 protobuf
-torch
-autoawq
+torch==2.6.0
+autoawq==0.2.7

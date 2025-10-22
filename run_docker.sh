@@ -1,4 +1,4 @@
-#!/bin/bash
+∫#!/bin/bash
 
 PHYS_DIR="/home/$(whoami)/MMTU"
 LLM_CACHE_DIR="/llms"
@@ -13,4 +13,4 @@ docker run \
     --memory="30g" \
     --gpus '"device='"$CUDA_VISIBLE_DEVICES"'"' \
     mmtu-image \
-    bash -c "cd /workspace && python3 inference.py -i ${1} -l info self_deploy --model qwen2.5-14b"
+    bash -c "cd /workspace && python3 inference.py -i ${1} -l info self_deploy --model llama-3.1-8b-awq"
