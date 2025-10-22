@@ -1,4 +1,4 @@
-∫#!/bin/bash
+#!/bin/bash
 
 PHYS_DIR="/home/$(whoami)/MMTU"
 LLM_CACHE_DIR="/llms"
