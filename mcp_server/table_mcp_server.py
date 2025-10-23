@@ -35,31 +35,57 @@ class TableMCPServer:
         """
         self.conn = None
         self.db_path = None
+        self.temp_db_path = None  # Track temporary database copy
 
         if db_path:
             self.connect(db_path)
 
     def connect(self, db_path: str):
         """
-        Connect to SQLite database
+        Connect to SQLite database (creates a temporary copy to preserve original)
 
         Args:
             db_path: Path to SQLite database (can contain $MMTU_HOME)
         """
+        import shutil
+        import tempfile
+
         # Expand environment variables
         db_path = os.path.expandvars(db_path)
 
         if not os.path.exists(db_path):
             raise FileNotFoundError(f"Database not found: {db_path}")
 
-        self.db_path = db_path
-        self.conn = sqlite3.connect(db_path)
+        # Disconnect any existing connection
+        if self.conn:
+            self.disconnect()
+
+        # Create temporary copy to preserve original database
+        temp_dir = tempfile.gettempdir()
+        temp_filename = f"mcp_temp_{os.path.basename(db_path)}_{os.getpid()}"
+        self.temp_db_path = os.path.join(temp_dir, temp_filename)
+
+        # Copy original database to temp location
+        shutil.copy2(db_path, self.temp_db_path)
+
+        # Connect to the temporary copy
+        self.db_path = db_path  # Keep original path for reference
+        self.conn = sqlite3.connect(self.temp_db_path)
 
     def disconnect(self):
-        """Close database connection"""
+        """Close database connection and cleanup temporary database"""
         if self.conn:
             self.conn.close()
             self.conn = None
+
+        # Clean up temporary database file
+        if self.temp_db_path and os.path.exists(self.temp_db_path):
+            try:
+                os.remove(self.temp_db_path)
+            except Exception as e:
+                # Non-critical error, just log it
+                print(f"Warning: Could not remove temp db {self.temp_db_path}: {e}")
+            self.temp_db_path = None
 
     def get_tools_schema(self) -> List[Dict[str, Any]]:
         """
@@ -259,31 +285,56 @@ class TableMCPServer:
         Execute SQL query with timeout
 
         Args:
-            query: SQL query to execute
+            query: SQL query to execute (all SQL statements allowed on temp copy)
             timeout: Timeout in seconds (default: 15)
 
         Returns:
             Query results as markdown table
-        """
-        # Security: Only allow SELECT queries
-        if not query.strip().upper().startswith("SELECT"):
-            return "Error: Only SELECT queries are allowed"
 
+        Note:
+            All queries run on a temporary database copy, so the original
+            database is never modified. INSERT/UPDATE/DELETE are safe.
+        """
         try:
             # Set timeout
             self.conn.execute(f"PRAGMA timeout = {timeout * 1000}")
 
-            # Execute query
-            df = pd.read_sql(query, self.conn)
+            # Check if query returns results (SELECT) or just modifies data
+            query_upper = query.strip().upper()
+            is_select = query_upper.startswith("SELECT")
 
-            if len(df) == 0:
-                return "Query returned 0 rows"
+            if is_select:
+                # Execute SELECT query and return results
+                df = pd.read_sql(query, self.conn)
 
-            # Limit output size
-            if len(df) > 100:
-                return f"Query returned {len(df)} rows (showing first 100):\n{df.head(100).to_markdown(index=False)}"
+                if len(df) == 0:
+                    return "Query returned 0 rows"
 
-            return f"Query returned {len(df)} rows:\n{df.to_markdown(index=False)}"
+                # Limit output size
+                if len(df) > 100:
+                    return f"Query returned {len(df)} rows (showing first 100):\n{df.head(100).to_markdown(index=False)}"
+
+                return f"Query returned {len(df)} rows:\n{df.to_markdown(index=False)}"
+            else:
+                # Execute non-SELECT query (INSERT/UPDATE/DELETE/CREATE)
+                cursor = self.conn.cursor()
+                cursor.execute(query)
+                self.conn.commit()
+                rows_affected = cursor.rowcount
+
+                # Return confirmation message
+                if query_upper.startswith("INSERT"):
+                    return f"INSERT successful: {rows_affected} row(s) inserted"
+                elif query_upper.startswith("UPDATE"):
+                    return f"UPDATE successful: {rows_affected} row(s) updated"
+                elif query_upper.startswith("DELETE"):
+                    return f"DELETE successful: {rows_affected} row(s) deleted"
+                elif query_upper.startswith("CREATE"):
+                    return "CREATE successful: table/index created"
+                elif query_upper.startswith("DROP"):
+                    return "DROP successful: table/index dropped"
+                else:
+                    return f"Query executed successfully: {rows_affected} row(s) affected"
 
         except Exception as e:
             return f"SQL Error: {str(e)}"
