@@ -13,3 +13,6 @@ bitsandbytes
 duckdb
 protobuf
 torch
+scipy 
+matplotlib 
+seaborn

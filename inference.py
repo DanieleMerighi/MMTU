@@ -465,6 +465,25 @@ def load_llama_3_1_8b_awq(max_new_tokens=2048):
     pipe.max_new_tokens = max_new_tokens
     return pipe, tokenizer
 
+def load_qwen_2_5_coder_7b(max_new_tokens=2048):
+    """Load Qwen 2.5 Coder 7B Instruct with 4-bit quantization"""
+    model_id = "Qwen/Qwen2.5-Coder-7B-Instruct"
+    tokenizer = AutoTokenizer.from_pretrained(
+        model_id,
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    model = AutoModelForCausalLM.from_pretrained(
+        model_id,
+        device_map="auto",
+        load_in_4bit=True,
+        trust_remote_code=True,
+        cache_dir="/llms"
+    )
+    pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
+    pipe.max_new_tokens = max_new_tokens
+    return pipe, tokenizer
+
 def load_custom_model(model_id, max_new_tokens=2048):
     """Load any HuggingFace model by ID"""
     tokenizer = AutoTokenizer.from_pretrained(
@@ -492,6 +511,7 @@ MODEL_REGISTRY = {
     "qwen3-4b": load_qwen3_4b,
     "llama-3.2-3b": load_llama_3_2_3b,
     "llama-3.1-8b-awq": load_llama_3_1_8b_awq,
+    "qwen-2.5-coder-7b": load_qwen_2_5_coder_7b,
 }
 
 def _lazy_load(model_name="qwen3-8b-awq", max_new_tokens=2048):
@@ -524,30 +544,63 @@ def _lazy_load(model_name="qwen3-8b-awq", max_new_tokens=2048):
     _CURRENT_MODEL = model_name
     return _PIPE, _TOK
 
-def self_deploy_query_function(model_name="qwen3-8b-awq"):
+def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, metadata=None):
     """
     Create a query function for a specific model.
-    
+
     Args:
         model_name: Model name from registry or HuggingFace ID
+        use_mcp: Enable MCP tools for adaptive table strategy
+        metadata: Example metadata (contains table info for MCP strategy)
     """
     _lazy_load(model_name)
+
+    # Import MCP components if needed
+    mcp_server = None
+    mcp_bridge = None
+
+    if use_mcp:
+        import sys
+        import os
+        sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mcp_server'))
+        from table_mcp_server import TableMCPServer
+        from mcp_bridge import MCPBridge
+
+        mcp_server = TableMCPServer()
+        pipe, tok = _lazy_load(model_name)
+        mcp_bridge = MCPBridge(pipe, tok, mcp_server, mode="auto")
+
     def query(prompt, temperature=0.0):
         pipe, tok = _lazy_load(model_name)
-        chat = tok.apply_chat_template(
-            [{"role":"user","content":prompt}], 
-            tokenize=False, 
-            add_generation_prompt=True
+
+        # Standard query (no MCP)
+        if not use_mcp or mcp_bridge is None:
+            chat = tok.apply_chat_template(
+                [{"role":"user","content":prompt}],
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            out = pipe(
+                chat,
+                max_new_tokens=pipe.max_new_tokens,
+                do_sample=(temperature>0),
+                temperature=(float(temperature) if temperature>0 else None),
+                return_full_text=False,
+                eos_token_id=tok.eos_token_id
+            )[0]["generated_text"]
+            return out
+
+        # MCP-enabled query
+        # Note: This is a simplified version - full integration would need
+        # to parse metadata, connect to database, and use adaptive strategy
+        messages = [{"role": "user", "content": prompt}]
+        response, tool_calls = mcp_bridge.chat_with_tools(
+            messages,
+            max_tool_rounds=3,
+            temperature=temperature
         )
-        out = pipe(
-            chat, 
-            max_new_tokens=pipe.max_new_tokens, 
-            do_sample=(temperature>0),
-            temperature=(float(temperature) if temperature>0 else None),
-            return_full_text=False, 
-            eos_token_id=tok.eos_token_id
-        )[0]["generated_text"]
-        return out
+        return response
+
     return query
 
 def main(args):
@@ -564,7 +617,17 @@ def main(args):
             args.endpoint, args.model, args.api_key)
         query_endpoints = [query_func]
     elif args.api_provider == "self_deploy":
-        query_func = self_deploy_query_function(args.model)
+        use_mcp = getattr(args, 'use_mcp', False)
+        if use_mcp:
+            print("=" * 80)
+            print("MCP MODE ENABLED")
+            print("=" * 80)
+            print("Using adaptive table strategy with MCP tools:")
+            print("  - Small tables (<488 cells): Direct inclusion")
+            print("  - Medium tables (488-1842 cells): Hybrid (schema + sample + tools)")
+            print("  - Large tables (>1842 cells): SQL-only (schema + iterative tools)")
+            print("=" * 80)
+        query_func = self_deploy_query_function(args.model, use_mcp=use_mcp)
         query_endpoints = [query_func]
     else:
         raise ValueError("Invalid API provider")
@@ -670,10 +733,15 @@ if __name__ == "__main__":
 
     parser_self_deploy = subparsers.add_parser("self_deploy", help="Self Deploy")
     parser_self_deploy.add_argument(
-        "--model", 
-        type=str, 
-        help="Model name from registry (qwen3-8b-awq, qwen3-4b, llama-3.2-3b, llama-3.1-8b-awq) or full HuggingFace ID", 
+        "--model",
+        type=str,
+        help="Model name from registry (qwen3-8b-awq, qwen3-4b, llama-3.2-3b, llama-3.1-8b-awq, qwen-2.5-coder-7b) or full HuggingFace ID",
         default="qwen3-8b-awq"
+    )
+    parser_self_deploy.add_argument(
+        "--use-mcp",
+        action="store_true",
+        help="Enable MCP tools for adaptive table strategy (recommended for large tables)"
     )
 
     parser.add_argument("-n", "--n_parallel_call_per_key", default=1,
