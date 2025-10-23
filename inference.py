@@ -382,8 +382,12 @@ def query_chat_endpoint(input_file, output_file, query_endpoints, temperature, n
     
 from transformers import AutoTokenizer, AutoModelForCausalLM, pipeline, BitsAndBytesConfig
 import torch
+import os
 
 _TOK=None; _PIPE=None; _CURRENT_MODEL=None
+
+# Dynamic cache directory - usa /models_cache se esiste (local), altrimenti /llms (shared)
+CACHE_DIR = "/models_cache" if os.path.exists("/models_cache") else "/llms"
 
 # ============================================================================
 # MODEL LOADING FUNCTIONS - Add your models here!
@@ -395,14 +399,14 @@ def load_qwen3_8b_awq(max_new_tokens=2048):
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, 
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
     pipe.max_new_tokens = max_new_tokens
@@ -414,14 +418,14 @@ def load_qwen3_4b(max_new_tokens=2048):
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, 
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
     pipe.max_new_tokens = max_new_tokens
@@ -433,14 +437,14 @@ def load_llama_3_2_3b(max_new_tokens=2048):
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, 
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
     pipe.max_new_tokens = max_new_tokens
@@ -452,14 +456,14 @@ def load_llama_3_1_8b_awq(max_new_tokens=2048):
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, 
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
     pipe.max_new_tokens = max_new_tokens
@@ -470,14 +474,14 @@ def load_custom_model(model_id, max_new_tokens=2048):
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, 
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
     pipe.max_new_tokens = max_new_tokens
@@ -489,14 +493,14 @@ def load_qwen2_5_7b(max_new_tokens=2048):
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, 
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
     pipe.max_new_tokens = max_new_tokens
@@ -508,14 +512,14 @@ def load_qwen2_5_14b(max_new_tokens=2048):
     tokenizer = AutoTokenizer.from_pretrained(
         model_id, 
         trust_remote_code=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     model = AutoModelForCausalLM.from_pretrained(
         model_id, 
         trust_remote_code=True,
         device_map="auto",
         low_cpu_mem_usage=True,
-        cache_dir="/llms"
+        cache_dir=CACHE_DIR
     )
     pipe = pipeline("text-generation", model=model, tokenizer=tokenizer)
     pipe.max_new_tokens = max_new_tokens

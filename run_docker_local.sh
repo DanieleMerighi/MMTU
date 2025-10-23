@@ -1,16 +1,21 @@
 #!/bin/bash
-#SBATCH -N 1
-#SBATCH --gpus=nvidia_geforce_rtx_3090:1
 
 PHYS_DIR="/home/$(whoami)/MMTU"
-LLM_CACHE_DIR="/llms"
-DOCKER_INTERNAL_CACHE_DIR="/llms"
+LOCAL_CACHE_DIR="/home/$(whoami)/MMTU/models_cache"
+DOCKER_INTERNAL_CACHE_DIR="/models_cache"
 INPUT_FILE="${1:-mmtu.jsonl}"
 MODEL="${2:-llama-3.1-8b-awq}"
 
+# Crea directory cache se non esiste
+mkdir -p "$LOCAL_CACHE_DIR"
+
+echo "Using LOCAL cache: $LOCAL_CACHE_DIR"
+echo "Dataset: $INPUT_FILE"
+echo "Model: $MODEL"
+
 docker run \
     -v "$PHYS_DIR":/workspace \
-    -v "$LLM_CACHE_DIR":"$DOCKER_INTERNAL_CACHE_DIR" \
+    -v "$LOCAL_CACHE_DIR":"$DOCKER_INTERNAL_CACHE_DIR" \
     -e HF_HOME="$DOCKER_INTERNAL_CACHE_DIR" \
     -e MMTU_HOME="/workspace" \
     --rm \
