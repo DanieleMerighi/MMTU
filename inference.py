@@ -252,20 +252,33 @@ def create_query_function_ai_foundry(endpoint, model, api_key):
     query.__name__ = f"query_with_{model.replace('-', '_')}"
     return query
 
-def query_worker(one_query_function_pointer, temperature, output_file, pbar, model_name="OpenAI"):
+def query_worker(one_query_function_pointer, temperature, output_file, pbar, model_name="OpenAI", use_mcp=False):
     while not query_queue.empty():
         json_line = None
         result = None
-        
+
         response = ""
         prompt_token = None
         completion_token = None
         time_taken = None
-        
+
         try:
             json_line = query_queue.get()
             messages = json_line['prompt']
-            result = one_query_function_pointer(messages, temperature)
+
+            # Pass json_line to query function if MCP is enabled
+            # This allows adaptive strategy to access metadata
+            if use_mcp:
+                # Check if function accepts json_line parameter
+                import inspect
+                sig = inspect.signature(one_query_function_pointer)
+                if 'json_line' in sig.parameters:
+                    result = one_query_function_pointer(messages, temperature, json_line=json_line)
+                else:
+                    result = one_query_function_pointer(messages, temperature)
+            else:
+                result = one_query_function_pointer(messages, temperature)
+
             logger.info(
                 f"processed with {one_query_function_pointer.__name__}")
         except queue.Empty:
@@ -305,7 +318,7 @@ def query_worker(one_query_function_pointer, temperature, output_file, pbar, mod
 # main entry point for multi-thread querying
 
 
-def query_chat_endpoint(input_file, output_file, query_endpoints, temperature, n_parallel_call_per_key=4, shuffle=False, model_name="OpenAI"):
+def query_chat_endpoint(input_file, output_file, query_endpoints, temperature, n_parallel_call_per_key=4, shuffle=False, model_name="OpenAI", use_mcp=False):
     print(f"Evaluating {input_file} ...")
     t0 = time.time()
     all_queries = pd.read_json(input_file, lines=True)
@@ -366,7 +379,7 @@ def query_chat_endpoint(input_file, output_file, query_endpoints, temperature, n
 
     for one_query_function_pointer in all_query_function_pointers:
         thread = threading.Thread(target=query_worker, args=(
-            one_query_function_pointer, temperature, output_file, progress_bar, model_name))
+            one_query_function_pointer, temperature, output_file, progress_bar, model_name, use_mcp))
         thread.start()
         threads.append(thread)
 
@@ -614,7 +627,15 @@ def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, metadat
         pipe, tok = _lazy_load(model_name)
         mcp_bridge = MCPBridge(pipe, tok, mcp_server, mode="auto")
 
-    def query(prompt, temperature=0.0):
+    def query(prompt, temperature=0.0, json_line=None):
+        """
+        Query function with optional MCP support
+
+        Args:
+            prompt: The prompt string
+            temperature: Sampling temperature
+            json_line: Optional metadata dict containing table info for MCP
+        """
         pipe, tok = _lazy_load(model_name)
 
         # Standard query (no MCP)
@@ -634,15 +655,105 @@ def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, metadat
             )[0]["generated_text"]
             return out
 
-        # MCP-enabled query
-        # Note: This is a simplified version - full integration would need
-        # to parse metadata, connect to database, and use adaptive strategy
+        # MCP-enabled query with adaptive strategy
+        metadata_dict = json_line.get('metadata', {}) if json_line else {}
+        table_cells = metadata_dict.get('_table_cells', 0)
+
+        # Adaptive strategy based on table size
+        if table_cells > 0:
+            # Extract database path if available
+            db_path = None
+
+            # Try to find database path in metadata
+            # Common patterns: sqlite_path, database_path, db_path
+            for key in ['sqlite_path', 'database_path', 'db_path', 'table_path']:
+                if key in metadata_dict:
+                    db_path = metadata_dict[key]
+                    break
+
+            # If no explicit path, try to infer from prompt or other fields
+            if not db_path and 'table' in metadata_dict:
+                table_info = metadata_dict.get('table', '')
+                if isinstance(table_info, str) and '$MMTU_HOME' in table_info:
+                    # Extract path that looks like a database path
+                    import re
+                    matches = re.findall(r'\$MMTU_HOME[/\w\-\.]+\.sqlite', table_info)
+                    if matches:
+                        db_path = matches[0]
+
+            # Connect to database if we found a path
+            if db_path and mcp_server:
+                try:
+                    mcp_server.connect(db_path)
+
+                    # Adaptive strategy based on table size
+                    if table_cells > 1842:
+                        # Large tables: SQL-only (schema + tools)
+                        schema = mcp_server.get_schema()
+                        prompt = f"""You have access to a database. Use the available tools to explore and query it.
+
+Database Schema:
+{schema}
+
+Available Tools:
+- get_schema(): Get the structure of all tables
+- count_rows(table_name): Count rows in a table
+- sample_rows(table_name, n): Get sample rows
+- execute_sql(query): Execute SQL SELECT query
+- get_distinct_values(table_name, column_name): Get unique values
+- get_statistics(table_name, column_name): Get min/max/avg statistics
+
+Question: {prompt}
+
+Explore the database using the tools and answer the question."""
+
+                    elif table_cells > 488:
+                        # Medium tables: Hybrid (schema + sample + tools)
+                        schema = mcp_server.get_schema()
+
+                        # Get first table name for sampling
+                        cursor = mcp_server.conn.execute(
+                            "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1"
+                        )
+                        first_table = cursor.fetchone()
+                        sample = ""
+                        if first_table:
+                            sample = mcp_server.sample_rows(first_table[0], 100)
+
+                        prompt = f"""You have access to a database. Here's the schema and a sample of the data.
+
+Database Schema:
+{schema}
+
+{sample}
+
+Available Tools (use them to explore further):
+- execute_sql(query): Execute SQL queries
+- get_distinct_values(table_name, column_name): Get unique values
+- count_rows(table_name): Count rows
+
+Question: {prompt}
+
+Use the tools if needed to answer the question."""
+
+                    # For small tables (<488 cells), keep original prompt (direct inclusion)
+
+                except Exception as e:
+                    print(f"Warning: Could not connect to database: {e}")
+                    # Fallback to direct inclusion
+
+        # Execute with MCP tools
         messages = [{"role": "user", "content": prompt}]
         response, tool_calls = mcp_bridge.chat_with_tools(
             messages,
             max_tool_rounds=3,
             temperature=temperature
         )
+
+        # Cleanup database connection
+        if mcp_server and mcp_server.conn:
+            mcp_server.disconnect()
+
         return response
 
     return query
@@ -701,23 +812,28 @@ def main(args):
       temp = args.temperature if args.temperature is not None else 0.0
       # Determina il model_name in base al provider
       model_name = getattr(args, 'model', args.api_provider)
+      use_mcp = getattr(args, 'use_mcp', False)
       for input_file in args.input_file:
         assert os.path.exists(input_file), f"{input_file} not found"
         # nome output: <input>.<model_name>.result.jsonl
         base = os.path.splitext(input_file)[0]
         # Usa il nome del modello invece di api_provider
         model_output_name = model_name.replace('/', '-').replace('_', '-')
+        # Add -mcp suffix if MCP is enabled
+        if use_mcp:
+            model_output_name += "-mcp"
         out_path = f"{base}.{model_output_name}.result.jsonl"
         # evita concorrenza GPU
         n_par = max(1, int(args.n_parallel_call_per_key))
         query_chat_endpoint(
             input_file,
             out_path,
-            [query_func],                   
+            [query_func],
             temp,
             n_parallel_call_per_key=n_par,
             shuffle=args.shuffle,
-            model_name=model_name
+            model_name=model_name,
+            use_mcp=use_mcp
         )
       return
     else:
@@ -736,14 +852,16 @@ def main(args):
         model_output_name = args.model.replace('/', '-').replace('_', '-')
         output_file = f"mmtu.{model_output_name}.result.jsonl"            
 
+        use_mcp = getattr(args, 'use_mcp', False)
         query_chat_endpoint(
-                mmtu_file, 
+                mmtu_file,
                 output_file,
-                query_endpoints, 
-                args.temperature, 
-                args.n_parallel_call_per_key, 
-                shuffle=args.shuffle, 
-                model_name=args.model
+                query_endpoints,
+                args.temperature,
+                args.n_parallel_call_per_key,
+                shuffle=args.shuffle,
+                model_name=args.model,
+                use_mcp=use_mcp
             )
 
     
