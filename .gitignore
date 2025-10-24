@@ -1,28 +1,46 @@
 venv/
 __pycache__/
 .vscode/
+.DS_Store
 
-
+# Data directories
 data/
-data_sqlite
+data_sqlite/
+dataTAR/
 datasets_prompt/
 resources/
-results/
 tmp_exec/
 
+# Results directories
+results/
+results_thesis/
+thesis_analysis/
+error_analysis/
+
+# Generated datasets and inference results
+# (uncomment to track in git if needed)
+# datasets/*.jsonl
+# inference_results/*.result.jsonl
+
+# Shell scripts (keep tracked ones)
 bash.sh
 run_sample200.sh
 
+# Generated files
 *.ipynb
 *.pdf
 *.csv
 *.tar.gz
-error_analysis/
-
-configurations/Data-Imputation/v0.2_no_no_explanation
+*.bak
+*.pyc
+*.log
 
 pyrightconfig.json
 
-.venv
+# Thesis related
+tesi/
+thesis/
 
-.github/
+# User-specific files
+.claude
+.serena
