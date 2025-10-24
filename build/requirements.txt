@@ -12,7 +12,8 @@ accelerate
 bitsandbytes
 duckdb
 protobuf
-torch
+torch==2.6.0
+autoawq==0.2.7
 scipy 
 matplotlib 
 seaborn
