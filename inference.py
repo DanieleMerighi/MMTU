@@ -399,8 +399,15 @@ import os
 
 _TOK=None; _PIPE=None; _CURRENT_MODEL=None
 
-# Dynamic cache directory - usa /models_cache se esiste (local), altrimenti /llms (shared)
-CACHE_DIR = "/models_cache" if os.path.exists("/models_cache") else "/llms"
+# Dynamic cache directory - funziona sia su Docker che locale
+if os.path.exists("/models_cache"):
+    CACHE_DIR = "/models_cache"
+elif os.path.exists("/llms"):
+    CACHE_DIR = "/llms"
+else:
+    # Locale (Mac/Linux): usa standard HuggingFace cache
+    CACHE_DIR = os.path.join(os.path.expanduser("~"), ".cache", "huggingface")
+    os.makedirs(CACHE_DIR, exist_ok=True)
 
 # ============================================================================
 # MODEL LOADING FUNCTIONS - Add your models here!
@@ -622,6 +629,7 @@ def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, metadat
         sys.path.insert(0, os.path.join(os.path.dirname(__file__), 'mcp_server'))
         from table_mcp_server import TableMCPServer
         from mcp_bridge import MCPBridge
+        from table_parser import extract_and_create_database, cleanup_temp_database
 
         mcp_server = TableMCPServer()
         pipe, tok = _lazy_load(model_name)
@@ -656,41 +664,44 @@ def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, metadat
             return out
 
         # MCP-enabled query with adaptive strategy
-        metadata_dict = json_line.get('metadata', {}) if json_line else {}
-        table_cells = metadata_dict.get('_table_cells', 0)
+        # _table_cells is at the top level of json_line, not inside metadata
+        table_cells = json_line.get('_table_cells', 0) if json_line else 0
 
-        # Adaptive strategy based on table size
-        if table_cells > 0:
-            # Extract database path if available
-            db_path = None
-
-            # Try to find database path in metadata
-            # Common patterns: sqlite_path, database_path, db_path
-            for key in ['sqlite_path', 'database_path', 'db_path', 'table_path']:
-                if key in metadata_dict:
-                    db_path = metadata_dict[key]
-                    break
-
-            # If no explicit path, try to infer from prompt or other fields
-            if not db_path and 'table' in metadata_dict:
-                table_info = metadata_dict.get('table', '')
-                if isinstance(table_info, str) and '$MMTU_HOME' in table_info:
-                    # Extract path that looks like a database path
-                    import re
-                    matches = re.findall(r'\$MMTU_HOME[/\w\-\.]+\.sqlite', table_info)
-                    if matches:
-                        db_path = matches[0]
-
-            # Connect to database if we found a path
-            if db_path and mcp_server:
+        # Parse metadata string to dict if needed
+        metadata_dict = {}
+        if json_line and 'metadata' in json_line:
+            metadata_val = json_line['metadata']
+            if isinstance(metadata_val, str):
                 try:
-                    mcp_server.connect(db_path)
+                    metadata_dict = json.loads(metadata_val)
+                except json.JSONDecodeError:
+                    metadata_dict = {}
+            elif isinstance(metadata_val, dict):
+                metadata_dict = metadata_val
 
-                    # Adaptive strategy based on table size
-                    if table_cells > 1842:
-                        # Large tables: SQL-only (schema + tools)
-                        schema = mcp_server.get_schema()
-                        prompt = f"""You have access to a database. Use the available tools to explore and query it.
+        # Extract or create database for ALL tasks (not just NL2SQL)
+        db_path = None
+        is_temp_db = False
+        task_name = metadata_dict.get('task', '')
+
+        # Try to get database from metadata or create from prompt
+        db_path = extract_and_create_database(prompt, metadata_dict)
+
+        if db_path:
+            # Check if it's a temporary database
+            is_temp_db = 'mmtu_mcp_' in db_path
+
+            # Connect to database
+            try:
+                mcp_server.connect(db_path)
+
+                # Adaptive strategy based on table size
+                original_question = prompt  # Save original for reference
+
+                if table_cells > 1842:
+                    # Large tables: SQL-only (schema + iterative tools)
+                    schema = mcp_server.get_schema()
+                    prompt = f"""You have access to a database. Use the available tools to explore and query it.
 
 Database Schema:
 {schema}
@@ -703,24 +714,24 @@ Available Tools:
 - get_distinct_values(table_name, column_name): Get unique values
 - get_statistics(table_name, column_name): Get min/max/avg statistics
 
-Question: {prompt}
+Original Question: {original_question}
 
 Explore the database using the tools and answer the question."""
 
-                    elif table_cells > 488:
-                        # Medium tables: Hybrid (schema + sample + tools)
-                        schema = mcp_server.get_schema()
+                elif table_cells > 488:
+                    # Medium tables: Hybrid (schema + sample + tools)
+                    schema = mcp_server.get_schema()
 
-                        # Get first table name for sampling
-                        cursor = mcp_server.conn.execute(
-                            "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1"
-                        )
-                        first_table = cursor.fetchone()
-                        sample = ""
-                        if first_table:
-                            sample = mcp_server.sample_rows(first_table[0], 100)
+                    # Get first table name for sampling
+                    cursor = mcp_server.conn.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table' LIMIT 1"
+                    )
+                    first_table = cursor.fetchone()
+                    sample = ""
+                    if first_table:
+                        sample = mcp_server.sample_rows(first_table[0], 100)
 
-                        prompt = f"""You have access to a database. Here's the schema and a sample of the data.
+                    prompt = f"""You have access to a database. Here's the schema and a sample of the data.
 
 Database Schema:
 {schema}
@@ -732,15 +743,75 @@ Available Tools (use them to explore further):
 - get_distinct_values(table_name, column_name): Get unique values
 - count_rows(table_name): Count rows
 
-Question: {prompt}
+Original Question: {original_question}
 
 Use the tools if needed to answer the question."""
 
-                    # For small tables (<488 cells), keep original prompt (direct inclusion)
+                else:
+                    # Small tables (<488 cells): Direct inclusion (NO MCP)
+                    # Use standard query for better performance
+                    print(f"Small table ({table_cells} cells), using direct inclusion")
+                    mcp_server.disconnect()
 
-                except Exception as e:
-                    print(f"Warning: Could not connect to database: {e}")
-                    # Fallback to direct inclusion
+                    chat = tok.apply_chat_template(
+                        [{"role":"user","content":prompt}],
+                        tokenize=False,
+                        add_generation_prompt=True
+                    )
+                    out = pipe(
+                        chat,
+                        max_new_tokens=pipe.max_new_tokens,
+                        do_sample=(temperature>0),
+                        temperature=(float(temperature) if temperature>0 else None),
+                        return_full_text=False,
+                        eos_token_id=tok.eos_token_id
+                    )[0]["generated_text"]
+
+                    # Cleanup temp database if needed
+                    if is_temp_db:
+                        cleanup_temp_database(db_path)
+
+                    return out
+
+            except Exception as e:
+                print(f"Warning: Could not connect to database: {e}")
+                # Fallback to standard query
+                chat = tok.apply_chat_template(
+                    [{"role":"user","content":prompt}],
+                    tokenize=False,
+                    add_generation_prompt=True
+                )
+                out = pipe(
+                    chat,
+                    max_new_tokens=pipe.max_new_tokens,
+                    do_sample=(temperature>0),
+                    temperature=(float(temperature) if temperature>0 else None),
+                    return_full_text=False,
+                    eos_token_id=tok.eos_token_id
+                )[0]["generated_text"]
+
+                # Cleanup temp database if needed
+                if is_temp_db:
+                    cleanup_temp_database(db_path)
+
+                return out
+        else:
+            # No database available, use standard query
+            print(f"Info: No tables found for {task_name}, using standard query")
+            chat = tok.apply_chat_template(
+                [{"role":"user","content":prompt}],
+                tokenize=False,
+                add_generation_prompt=True
+            )
+            out = pipe(
+                chat,
+                max_new_tokens=pipe.max_new_tokens,
+                do_sample=(temperature>0),
+                temperature=(float(temperature) if temperature>0 else None),
+                return_full_text=False,
+                eos_token_id=tok.eos_token_id
+            )[0]["generated_text"]
+            return out
 
         # Execute with MCP tools
         messages = [{"role": "user", "content": prompt}]
@@ -753,6 +824,10 @@ Use the tools if needed to answer the question."""
         # Cleanup database connection
         if mcp_server and mcp_server.conn:
             mcp_server.disconnect()
+
+        # Cleanup temporary database if needed
+        if is_temp_db and db_path:
+            cleanup_temp_database(db_path)
 
         return response
 
