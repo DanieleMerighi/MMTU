@@ -134,15 +134,26 @@ class MCPBridge:
             )
 
             # Generate response
-            inputs = self.tokenizer(prompt, return_tensors="pt")
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=temperature > 0
-            )
-
-            response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
+            # Check if model is a pipeline or raw model
+            if hasattr(self.model, '__call__') and not hasattr(self.model, 'generate'):
+                # It's a pipeline - call directly
+                response = self.model(
+                    prompt,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature if temperature > 0 else None,
+                    do_sample=temperature > 0,
+                    return_full_text=False
+                )[0]['generated_text']
+            else:
+                # It's a raw model - use generate
+                inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature if temperature > 0 else 1.0,
+                    do_sample=temperature > 0
+                )
+                response = self.tokenizer.decode(outputs[0], skip_special_tokens=True)
 
             # Parse for tool calls
             tool_call = self._parse_native_tool_call(response)
@@ -208,15 +219,27 @@ class MCPBridge:
             )
 
             # Generate response
-            inputs = self.tokenizer(prompt, return_tensors="pt")
-            outputs = self.model.generate(
-                **inputs,
-                max_new_tokens=max_new_tokens,
-                temperature=temperature,
-                do_sample=temperature > 0
-            )
-
-            response = self.tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
+            # Check if model is a pipeline or raw model
+            if hasattr(self.model, '__call__') and not hasattr(self.model, 'generate'):
+                # It's a pipeline - call directly
+                response = self.model(
+                    prompt,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature if temperature > 0 else None,
+                    do_sample=temperature > 0,
+                    return_full_text=False
+                )[0]['generated_text']
+            else:
+                # It's a raw model - use generate
+                inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+                outputs = self.model.generate(
+                    **inputs,
+                    max_new_tokens=max_new_tokens,
+                    temperature=temperature if temperature > 0 else 1.0,
+                    do_sample=temperature > 0
+                )
+                # Skip prompt tokens in response
+                response = self.tokenizer.decode(outputs[0][inputs['input_ids'].shape[1]:], skip_special_tokens=True)
 
             # Parse for tool calls using prompt-based markers
             tool_call = self._parse_prompt_tool_call(response)
