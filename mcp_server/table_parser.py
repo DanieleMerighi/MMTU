@@ -9,7 +9,6 @@ import pandas as pd
 import sqlite3
 import os
 import tempfile
-from io import StringIO
 
 
 def extract_markdown_tables(text: str) -> list[tuple[str, pd.DataFrame]]:
@@ -82,19 +81,20 @@ def parse_markdown_table(lines: list[str]) -> pd.DataFrame:
     if len(data_lines) < 2:  # Need at least header + 1 row
         return pd.DataFrame()
 
-    # Convert to CSV format
-    csv_lines = []
-    for line in data_lines:
-        # Remove leading/trailing |
-        line = line.strip('|')
-        # Split by | and strip whitespace
-        cells = [cell.strip() for cell in line.split('|')]
-        csv_lines.append(','.join(cells))
+    # Parse directly into DataFrame (avoid CSV conversion issues)
+    # Extract header
+    header_line = data_lines[0].strip('|')
+    header = [cell.strip() for cell in header_line.split('|')]
 
-    csv_text = '\n'.join(csv_lines)
+    # Extract rows
+    rows = []
+    for line in data_lines[1:]:
+        line = line.strip('|')
+        row = [cell.strip() for cell in line.split('|')]
+        rows.append(row)
 
     try:
-        df = pd.read_csv(StringIO(csv_text))
+        df = pd.DataFrame(rows, columns=header)
         return df
     except Exception as e:
         print(f"Error parsing table: {e}")
