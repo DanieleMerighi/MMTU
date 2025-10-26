@@ -61,13 +61,18 @@ def extract_markdown_tables(text: str) -> list[tuple[str, pd.DataFrame]]:
 
 def parse_markdown_table(lines: list[str]) -> pd.DataFrame:
     """
-    Parse Markdown table lines into DataFrame
+    Parse Markdown table lines into DataFrame (ROBUST VERSION)
 
     Args:
         lines: List of table lines (|col1|col2|...)
 
     Returns:
         DataFrame
+
+    Handles:
+    - Column count mismatches (padding/truncating)
+    - Duplicate column names (auto-renaming)
+    - Empty column names (auto-naming)
     """
     if len(lines) < 2:
         return pd.DataFrame()
@@ -86,11 +91,39 @@ def parse_markdown_table(lines: list[str]) -> pd.DataFrame:
     header_line = data_lines[0].strip('|')
     header = [cell.strip() for cell in header_line.split('|')]
 
+    # FIX 1: Handle duplicate column names
+    seen_names = {}
+    unique_header = []
+    for col_name in header:
+        # Handle empty column names
+        if not col_name:
+            col_name = "unnamed"
+
+        # Handle duplicates
+        if col_name in seen_names:
+            seen_names[col_name] += 1
+            unique_header.append(f"{col_name}_{seen_names[col_name]}")
+        else:
+            seen_names[col_name] = 0
+            unique_header.append(col_name)
+
+    header = unique_header
+    num_cols = len(header)
+
     # Extract rows
     rows = []
     for line in data_lines[1:]:
         line = line.strip('|')
         row = [cell.strip() for cell in line.split('|')]
+
+        # FIX 2: Handle column count mismatch
+        if len(row) < num_cols:
+            # Pad with empty strings
+            row.extend([''] * (num_cols - len(row)))
+        elif len(row) > num_cols:
+            # Truncate extra columns
+            row = row[:num_cols]
+
         rows.append(row)
 
     try:
@@ -140,9 +173,12 @@ def extract_and_create_database(prompt: str, metadata: dict) -> str | None:
     Returns:
         Database path or None if no tables found
     """
+    print(f"[TABLE PARSER] extract_and_create_database called")
+
     # Check if we already have a sqlite_path (NL2SQL tasks)
     if 'sqlite_path' in metadata:
         sqlite_path = metadata['sqlite_path']
+        print(f"[TABLE PARSER] Found sqlite_path in metadata: {sqlite_path}")
         # Expand $MMTU_HOME
         if '$MMTU_HOME' in sqlite_path:
             sqlite_path = sqlite_path.replace(
@@ -150,16 +186,24 @@ def extract_and_create_database(prompt: str, metadata: dict) -> str | None:
                 os.environ.get('MMTU_HOME', '/app')
             )
         if os.path.exists(sqlite_path):
+            print(f"[TABLE PARSER] Using existing database: {sqlite_path}")
             return sqlite_path
+        else:
+            print(f"[TABLE PARSER] Database not found: {sqlite_path}")
 
     # Extract tables from prompt
+    print(f"[TABLE PARSER] Extracting tables from prompt ({len(prompt)} chars)...")
     tables = extract_markdown_tables(prompt)
+    print(f"[TABLE PARSER] Found {len(tables)} tables")
 
     if not tables:
+        print(f"[TABLE PARSER] No tables found, returning None")
         return None
 
     # Create temporary database
+    print(f"[TABLE PARSER] Creating temp database...")
     db_path = create_temp_database(tables)
+    print(f"[TABLE PARSER] Database created: {db_path}")
 
     return db_path
 

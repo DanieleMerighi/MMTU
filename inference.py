@@ -272,11 +272,14 @@ def query_worker(one_query_function_pointer, temperature, output_file, pbar, mod
                 # Check if function accepts json_line parameter
                 import inspect
                 sig = inspect.signature(one_query_function_pointer)
+                print(f"[MCP DEBUG query_worker] use_mcp={use_mcp}, 'json_line' in sig={('json_line' in sig.parameters)}, cells={json_line.get('_table_cells', 0) if json_line else 0}")
                 if 'json_line' in sig.parameters:
                     result = one_query_function_pointer(messages, temperature, json_line=json_line)
                 else:
+                    print("[MCP WARNING] Function does NOT accept json_line parameter!")
                     result = one_query_function_pointer(messages, temperature)
             else:
+                print(f"[MCP DEBUG query_worker] use_mcp={use_mcp}, skipping MCP")
                 result = one_query_function_pointer(messages, temperature)
 
             logger.info(
@@ -666,6 +669,16 @@ def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, metadat
         # MCP-enabled query with adaptive strategy
         # _table_cells is at the top level of json_line, not inside metadata
         table_cells = json_line.get('_table_cells', 0) if json_line else 0
+
+        # DEBUG: Log table cells and strategy decision
+        print(f"[MCP DEBUG] json_line present: {json_line is not None}")
+        print(f"[MCP DEBUG] table_cells: {table_cells}")
+        if table_cells > 1842:
+            print(f"[MCP DEBUG] Strategy: LARGE (SQL-only)")
+        elif table_cells > 488:
+            print(f"[MCP DEBUG] Strategy: MEDIUM (Hybrid)")
+        else:
+            print(f"[MCP DEBUG] Strategy: SMALL (Direct inclusion)")
 
         # Parse metadata string to dict if needed
         metadata_dict = {}
