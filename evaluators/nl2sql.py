@@ -132,13 +132,52 @@ class NSEvaluator(BaseEvaluator):
         }
 
     def _get_pred(self, completion):
+        """
+        Extract SQL from completion with multiple strategies:
+        1. SQL code blocks (```sql...```)
+        2. Tool calls (<tool_call>...</tool_call>)
+        3. Plain SQL statements
+        """
+        # Strategy 1: Try SQL code blocks first
         pattern = re.compile(r"```sql(.*?)```", re.DOTALL)
         matches = re.findall(pattern, completion)
-        if len(matches) == 0:
-            if completion.lower().strip().startswith("select"):
-                return completion
-            return "SQLCodeBlockNotFound"
-        return matches[-1].strip()
+        if len(matches) > 0:
+            return matches[-1].strip()
+
+        # Strategy 2: Try tool calls (MCP format)
+        tool_call_pattern = re.compile(r"<tool_call>(.*?)</tool_call>", re.DOTALL)
+        tool_matches = re.findall(tool_call_pattern, completion)
+        for tool_match in tool_matches:
+            try:
+                # Parse JSON from tool call
+                tool_data = json.loads(tool_match)
+                # Check if it's an execute_sql tool call
+                if tool_data.get("name") == "execute_sql":
+                    sql_query = tool_data.get("arguments", {}).get("query")
+                    if sql_query:
+                        return sql_query.strip()
+            except (json.JSONDecodeError, AttributeError, KeyError):
+                # If parsing fails, try next tool call
+                continue
+
+        # Strategy 3: Try plain SQL statements (starts with SELECT/WITH/INSERT/etc)
+        completion_stripped = completion.strip().lower()
+        sql_keywords = ["select", "with", "insert", "update", "delete"]
+        for keyword in sql_keywords:
+            if completion_stripped.startswith(keyword):
+                # Extract until semicolon or end
+                sql_match = re.match(
+                    rf"(?i)({keyword}.*?)(;|\Z)",
+                    completion,
+                    re.DOTALL
+                )
+                if sql_match:
+                    return sql_match.group(1).strip()
+                # If no semicolon, return whole completion
+                return completion.strip()
+
+        # No SQL found
+        return "SQLCodeBlockNotFound"
 
     def parse_raw_result(self, raw_result, n_jobs=1):
         args = []

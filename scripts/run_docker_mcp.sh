@@ -29,4 +29,4 @@ docker run \
     --memory="30g" \
     --gpus '"device='"$CUDA_VISIBLE_DEVICES"'"' \
     mmtu-image \
-    bash -c "cd /workspace && python3 inference.py -i $INPUT_FILE -l info self_deploy --model $MODEL --use-mcp"
+    bash -c "cd /workspace && python3 inference.py -i $INPUT_FILE -l info self_deploy --model $MODEL --mcp-strategy direct_sql"

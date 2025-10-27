@@ -611,13 +611,14 @@ def _lazy_load(model_name="qwen3-8b-awq", max_new_tokens=2048):
     _CURRENT_MODEL = model_name
     return _PIPE, _TOK
 
-def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, metadata=None):
+def self_deploy_query_function(model_name="qwen3-8b-awq", use_mcp=False, mcp_strategy="auto", metadata=None):
     """
     Create a query function for a specific model.
 
     Args:
         model_name: Model name from registry or HuggingFace ID
         use_mcp: Enable MCP tools for adaptive table strategy
+        mcp_strategy: MCP strategy - "tool_calling", "direct_sql", or "auto"
         metadata: Example metadata (contains table info for MCP strategy)
     """
     _lazy_load(model_name)
@@ -826,13 +827,33 @@ Use the tools if needed to answer the question."""
             )[0]["generated_text"]
             return out
 
-        # Execute with MCP tools
+        # Decide which MCP strategy to use
+        effective_strategy = mcp_strategy
+        if mcp_strategy == "auto":
+            # Auto mode: Use direct_sql for NL2SQL, tool_calling for others
+            effective_strategy = "direct_sql" if task_name == "NL2SQL" else "tool_calling"
+
+        print(f"[MCP] Using strategy: {effective_strategy} for task: {task_name}")
+
+        # Execute with appropriate MCP strategy
         messages = [{"role": "user", "content": prompt}]
-        response, tool_calls = mcp_bridge.chat_with_tools(
-            messages,
-            max_tool_rounds=3,
-            temperature=temperature
-        )
+
+        if effective_strategy == "direct_sql":
+            # Direct SQL generation - no tool calling
+            response = mcp_bridge.chat_direct_sql(
+                messages,
+                max_new_tokens=2048,
+                temperature=temperature,
+                reduce_overthinking=True
+            )
+        else:
+            # Tool calling mode
+            response, tool_calls = mcp_bridge.chat_with_tools(
+                messages,
+                max_tool_rounds=3,
+                max_new_tokens=2048,
+                temperature=temperature
+            )
 
         # Cleanup database connection
         if mcp_server and mcp_server.conn:
@@ -860,17 +881,36 @@ def main(args):
             args.endpoint, args.model, args.api_key)
         query_endpoints = [query_func]
     elif args.api_provider == "self_deploy":
-        use_mcp = getattr(args, 'use_mcp', False)
+        mcp_strategy = getattr(args, 'mcp_strategy', None)
+        use_mcp = mcp_strategy is not None
+
         if use_mcp:
             print("=" * 80)
             print("MCP MODE ENABLED")
             print("=" * 80)
-            print("Using adaptive table strategy with MCP tools:")
+            print(f"MCP Strategy: {mcp_strategy}")
+            if mcp_strategy == "auto":
+                print("  - NL2SQL: Direct SQL generation (no tool calling)")
+                print("  - Other tasks: Tool calling mode")
+            elif mcp_strategy == "direct_sql":
+                print("  - All tasks: Direct SQL generation")
+            else:  # tool_calling
+                print("  - All tasks: Tool calling mode")
+            print()
+            print("Table size adaptive strategy:")
             print("  - Small tables (<488 cells): Direct inclusion")
             print("  - Medium tables (488-1842 cells): Hybrid (schema + sample + tools)")
             print("  - Large tables (>1842 cells): SQL-only (schema + iterative tools)")
             print("=" * 80)
-        query_func = self_deploy_query_function(args.model, use_mcp=use_mcp)
+        else:
+            print("=" * 80)
+            print("BASELINE MODE (No MCP)")
+            print("=" * 80)
+            print("Running standard inference without MCP tools")
+            print("To enable MCP, use: --mcp-strategy <auto|direct_sql|tool_calling>")
+            print("=" * 80)
+
+        query_func = self_deploy_query_function(args.model, use_mcp=use_mcp, mcp_strategy=mcp_strategy or "auto")
         query_endpoints = [query_func]
     else:
         raise ValueError("Invalid API provider")
@@ -900,16 +940,18 @@ def main(args):
       temp = args.temperature if args.temperature is not None else 0.0
       # Determina il model_name in base al provider
       model_name = getattr(args, 'model', args.api_provider)
-      use_mcp = getattr(args, 'use_mcp', False)
+      mcp_strategy = getattr(args, 'mcp_strategy', None)
+      use_mcp = mcp_strategy is not None
       for input_file in args.input_file:
         assert os.path.exists(input_file), f"{input_file} not found"
         # nome output: <input>.<model_name>.result.jsonl
         base = os.path.splitext(input_file)[0]
         # Usa il nome del modello invece di api_provider
         model_output_name = model_name.replace('/', '-').replace('_', '-')
-        # Add -mcp suffix if MCP is enabled
+        # Add -mcp suffix if MCP is enabled, with strategy name
         if use_mcp:
-            model_output_name += "-mcp"
+            strategy_suffix = mcp_strategy if mcp_strategy else "auto"
+            model_output_name += f"-mcp-{strategy_suffix}"
         out_path = f"{base}.{model_output_name}.result.jsonl"
         # evita concorrenza GPU
         n_par = max(1, int(args.n_parallel_call_per_key))
@@ -938,9 +980,13 @@ def main(args):
         
         # Usa il nome del modello invece di api_provider nel nome file
         model_output_name = args.model.replace('/', '-').replace('_', '-')
-        output_file = f"mmtu.{model_output_name}.result.jsonl"            
+        mcp_strategy = getattr(args, 'mcp_strategy', None)
+        use_mcp = mcp_strategy is not None
+        if use_mcp:
+            strategy_suffix = mcp_strategy if mcp_strategy else "auto"
+            model_output_name += f"-mcp-{strategy_suffix}"
+        output_file = f"mmtu.{model_output_name}.result.jsonl"
 
-        use_mcp = getattr(args, 'use_mcp', False)
         query_chat_endpoint(
                 mmtu_file,
                 output_file,
@@ -989,9 +1035,11 @@ if __name__ == "__main__":
         default="qwen3-8b-awq"
     )
     parser_self_deploy.add_argument(
-        "--use-mcp",
-        action="store_true",
-        help="Enable MCP tools for adaptive table strategy (recommended for large tables)"
+        "--mcp-strategy",
+        type=str,
+        choices=["tool_calling", "direct_sql", "auto"],
+        default=None,
+        help="Enable MCP with strategy: 'tool_calling' (iterative tools), 'direct_sql' (direct generation), 'auto' (task-specific). If not specified, runs baseline without MCP."
     )
 
     parser.add_argument("-n", "--n_parallel_call_per_key", default=1,

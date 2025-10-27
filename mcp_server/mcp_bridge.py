@@ -379,6 +379,71 @@ Important: Only use tools when needed. For simple questions, answer directly."""
         text = re.sub(r'<tool_result>.*?</tool_result>', '', text, flags=re.DOTALL)
         return text.strip()
 
+    def chat_direct_sql(
+        self,
+        messages: List[Dict[str, str]],
+        max_new_tokens: int = 2048,
+        temperature: float = 0.0,
+        reduce_overthinking: bool = True
+    ) -> str:
+        """
+        Direct SQL generation mode - NO tool calling
+
+        Generates SQL directly without MCP tool calling overhead.
+        Reduces overthinking by using simpler prompts.
+
+        Args:
+            messages: Chat messages in OpenAI format
+            max_new_tokens: Max tokens to generate
+            temperature: Sampling temperature
+            reduce_overthinking: Add instructions to reduce verbose reasoning
+
+        Returns:
+            Generated response (should contain SQL in code block)
+        """
+        # Optionally add anti-overthinking instructions
+        if reduce_overthinking:
+            # Prepend instruction to be concise
+            system_msg = {
+                "role": "system",
+                "content": "Be concise. Think briefly, then generate SQL directly in a code block."
+            }
+            messages = [system_msg] + messages
+
+        # Apply standard chat template (no tools)
+        prompt = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True
+        )
+
+        # Generate response
+        if hasattr(self.model, '__call__') and not hasattr(self.model, 'generate'):
+            # It's a pipeline - call directly
+            response = self.model(
+                prompt,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature if temperature > 0 else None,
+                do_sample=temperature > 0,
+                return_full_text=False
+            )[0]['generated_text']
+        else:
+            # It's a raw model - use generate
+            inputs = self.tokenizer(prompt, return_tensors="pt").to(self.model.device)
+            outputs = self.model.generate(
+                **inputs,
+                max_new_tokens=max_new_tokens,
+                temperature=temperature if temperature > 0 else 1.0,
+                do_sample=temperature > 0
+            )
+            # Skip prompt tokens in response
+            response = self.tokenizer.decode(
+                outputs[0][inputs['input_ids'].shape[1]:],
+                skip_special_tokens=True
+            )
+
+        return response
+
 
 def test_bridge():
     """Test the MCP bridge with a simple example"""
